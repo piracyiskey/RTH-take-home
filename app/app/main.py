@@ -1,11 +1,36 @@
+import asyncio
+import bisect
+from contextlib import asynccontextmanager
+from datetime import date
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.browse import get_sort_tuple, make_cursor, parse_cursor
+from app.sla import compute_sla_report, process_request_sla
+from app.store import store
+from app.sync import run_sync_loop
+
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-app = FastAPI(title="Response-time report")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    sync_task = None
+    if not os.environ.get("PYTEST_CURRENT_TEST") and os.environ.get("DISABLE_SYNC") != "1":
+        sync_task = asyncio.create_task(run_sync_loop())
+    yield
+    if sync_task and not sync_task.done():
+        sync_task.cancel()
+        try:
+            await sync_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Response-time report", lifespan=lifespan)
 
 
 @app.get("/")
@@ -20,20 +45,150 @@ def health():
 
 @app.get("/ready")
 def ready():
-    # TODO: answer 200 {"ready": true} once your app can serve six-month reports (level 2).
+    if store.ready:
+        return {"ready": True}
     return JSONResponse(status_code=503, content={"ready": False})
-
-
-@app.get("/api/requests")
-def browse(request: Request):
-    # TODO (level 4): filters, sorting and cursor pagination, see docs/contract.md.
-    return JSONResponse(status_code=501, content={"error": "not implemented"})
 
 
 @app.get("/api/sla-report")
 def sla_report(request: Request):
-    # TODO: implement the response-time report here.
-    # Query params: from=YYYY-MM-DD, to=YYYY-MM-DD, e.g. request.query_params.get("from")
-    # (`from` is a Python keyword; Query(alias="from") also works).
-    # Use HelpdeskClient from app/helpdesk.py to call the helpdesk API.
-    return JSONResponse(status_code=501, content={"error": "not implemented"})
+    if not store.ready:
+        return JSONResponse(status_code=503, content={"error": "App is syncing data, not ready yet"})
+
+    from_date = request.query_params.get("from")
+    to_date = request.query_params.get("to")
+
+    if not from_date or not to_date:
+        return JSONResponse(status_code=400, content={"error": "Missing required 'from' or 'to' query parameter"})
+
+    try:
+        d_from = date.fromisoformat(from_date)
+        d_to = date.fromisoformat(to_date)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "Parameters 'from' and 'to' must be formatted as YYYY-MM-DD"})
+
+    if d_from > d_to:
+        return JSONResponse(status_code=400, content={"error": "'from' date cannot be after 'to' date"})
+
+    report = compute_sla_report(store, from_date, to_date)
+    return report
+
+
+@app.get("/api/requests")
+def browse(request: Request):
+    if not store.ready:
+        return JSONResponse(status_code=503, content={"error": "App is syncing data, not ready yet"})
+
+    params = request.query_params
+    from_date = params.get("from")
+    to_date = params.get("to")
+
+    if not from_date or not to_date:
+        return JSONResponse(status_code=400, content={"error": "Missing required 'from' or 'to' query parameter"})
+
+    try:
+        d_from = date.fromisoformat(from_date)
+        d_to = date.fromisoformat(to_date)
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "Parameters 'from' and 'to' must be formatted as YYYY-MM-DD"})
+
+    if d_from > d_to:
+        return JSONResponse(status_code=400, content={"error": "'from' date cannot be after 'to' date"})
+
+    # Optional filter: site_id
+    site_id_val = None
+    if "site_id" in params:
+        try:
+            site_id_val = int(params["site_id"])
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "site_id must be an integer"})
+
+    # Optional filter: responder_id
+    responder_id_val = None
+    if "responder_id" in params:
+        try:
+            responder_id_val = int(params["responder_id"])
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "responder_id must be an integer"})
+
+    # Optional filter: late (true / false)
+    late_val = None
+    if "late" in params:
+        raw_late = params["late"].lower()
+        if raw_late == "true":
+            late_val = True
+        elif raw_late == "false":
+            late_val = False
+        else:
+            return JSONResponse(status_code=400, content={"error": "late must be 'true' or 'false'"})
+
+    # Optional filter: within_target (true / false)
+    within_target_val = None
+    if "within_target" in params:
+        raw_target = params["within_target"].lower()
+        if raw_target == "true":
+            within_target_val = True
+        elif raw_target == "false":
+            within_target_val = False
+        else:
+            return JSONResponse(status_code=400, content={"error": "within_target must be 'true' or 'false'"})
+
+    # Sort parameter
+    sort_type = params.get("sort", "id")
+    if sort_type not in ("id", "-id", "response_business_minutes", "-response_business_minutes"):
+        return JSONResponse(status_code=400, content={"error": f"Invalid sort parameter: {sort_type}"})
+
+    # Limit parameter
+    limit_str = params.get("limit", "50")
+    try:
+        limit = int(limit_str)
+        if limit < 1 or limit > 200:
+            return JSONResponse(status_code=400, content={"error": "limit must be between 1 and 200"})
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "limit must be an integer"})
+
+    # Cursor parameter
+    cursor_str = params.get("cursor")
+    cursor_tuple = None
+    if cursor_str:
+        try:
+            cursor_tuple = tuple(parse_cursor(cursor_str, sort_type))
+        except ValueError as e:
+            return JSONResponse(status_code=400, content={"error": str(e)})
+
+    # Fetch eligible requests
+    eligible = store.get_eligible_requests(from_date, to_date)
+    filtered_rows = []
+
+    for req in eligible:
+        if site_id_val is not None and req.site_id != site_id_val:
+            continue
+
+        events = store.get_events(req.id)
+        row = process_request_sla(req, events, store)
+
+        if responder_id_val is not None and row["responder_id"] != responder_id_val:
+            continue
+        if late_val is not None and row["completed_late"] is not late_val:
+            continue
+        if within_target_val is not None and row["within_target"] is not within_target_val:
+            continue
+
+        filtered_rows.append(row)
+
+    # Sort rows
+    sorted_rows = sorted(filtered_rows, key=lambda r: get_sort_tuple(r, sort_type))
+    keys = [get_sort_tuple(r, sort_type) for r in sorted_rows]
+
+    start_idx = 0
+    if cursor_tuple is not None:
+        start_idx = bisect.bisect_right(keys, cursor_tuple)
+
+    page = sorted_rows[start_idx : start_idx + limit]
+
+    next_cursor = None
+    if start_idx + limit < len(sorted_rows) and len(page) > 0:
+        last_item_key = list(get_sort_tuple(page[-1], sort_type))
+        next_cursor = make_cursor(sort_type, last_item_key)
+
+    return {"data": page, "next_cursor": next_cursor}
