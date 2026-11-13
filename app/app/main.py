@@ -1,12 +1,15 @@
 import asyncio
 import bisect
+import csv
+import io
 from contextlib import asynccontextmanager
 from datetime import date
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.browse import get_sort_tuple, make_cursor, parse_cursor
@@ -76,44 +79,40 @@ def sla_report(request: Request):
     return report
 
 
-@app.get("/api/requests")
-def browse(request: Request):
-    if not store.ready:
-        return JSONResponse(status_code=503, content={"error": "App is syncing data, not ready yet"})
+def _parse_browse_params(params) -> tuple[JSONResponse | None, dict[str, Any]]:
+    """Parse and validate shared query params for /api/requests and /api/requests.csv.
 
-    params = request.query_params
+    Returns (error_response, parsed_dict). If error_response is not None, return it immediately.
+    """
     from_date = params.get("from")
     to_date = params.get("to")
 
     if not from_date or not to_date:
-        return JSONResponse(status_code=400, content={"error": "Missing required 'from' or 'to' query parameter"})
+        return JSONResponse(status_code=400, content={"error": "Missing required 'from' or 'to' query parameter"}), {}
 
     try:
         d_from = date.fromisoformat(from_date)
         d_to = date.fromisoformat(to_date)
     except ValueError:
-        return JSONResponse(status_code=400, content={"error": "Parameters 'from' and 'to' must be formatted as YYYY-MM-DD"})
+        return JSONResponse(status_code=400, content={"error": "Parameters 'from' and 'to' must be formatted as YYYY-MM-DD"}), {}
 
     if d_from > d_to:
-        return JSONResponse(status_code=400, content={"error": "'from' date cannot be after 'to' date"})
+        return JSONResponse(status_code=400, content={"error": "'from' date cannot be after 'to' date"}), {}
 
-    # Optional filter: site_id
     site_id_val = None
     if "site_id" in params:
         try:
             site_id_val = int(params["site_id"])
         except ValueError:
-            return JSONResponse(status_code=400, content={"error": "site_id must be an integer"})
+            return JSONResponse(status_code=400, content={"error": "site_id must be an integer"}), {}
 
-    # Optional filter: responder_id
     responder_id_val = None
     if "responder_id" in params:
         try:
             responder_id_val = int(params["responder_id"])
         except ValueError:
-            return JSONResponse(status_code=400, content={"error": "responder_id must be an integer"})
+            return JSONResponse(status_code=400, content={"error": "responder_id must be an integer"}), {}
 
-    # Optional filter: late (true / false)
     late_val = None
     if "late" in params:
         raw_late = params["late"].lower()
@@ -122,9 +121,8 @@ def browse(request: Request):
         elif raw_late == "false":
             late_val = False
         else:
-            return JSONResponse(status_code=400, content={"error": "late must be 'true' or 'false'"})
+            return JSONResponse(status_code=400, content={"error": "late must be 'true' or 'false'"}), {}
 
-    # Optional filter: within_target (true / false)
     within_target_val = None
     if "within_target" in params:
         raw_target = params["within_target"].lower()
@@ -133,12 +131,53 @@ def browse(request: Request):
         elif raw_target == "false":
             within_target_val = False
         else:
-            return JSONResponse(status_code=400, content={"error": "within_target must be 'true' or 'false'"})
+            return JSONResponse(status_code=400, content={"error": "within_target must be 'true' or 'false'"}), {}
 
-    # Sort parameter
     sort_type = params.get("sort", "id")
     if sort_type not in ("id", "-id", "response_business_minutes", "-response_business_minutes"):
-        return JSONResponse(status_code=400, content={"error": f"Invalid sort parameter: {sort_type}"})
+        return JSONResponse(status_code=400, content={"error": f"Invalid sort parameter: {sort_type}"}), {}
+
+    return None, {
+        "from_date": from_date, "to_date": to_date,
+        "site_id": site_id_val, "responder_id": responder_id_val,
+        "late": late_val, "within_target": within_target_val,
+        "sort": sort_type,
+    }
+
+
+def _get_filtered_sorted_rows(p: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return all SLA rows matching the parsed browse parameters, sorted."""
+    eligible = store.get_eligible_requests(p["from_date"], p["to_date"])
+    filtered_rows = []
+
+    for req in eligible:
+        if p["site_id"] is not None and req.site_id != p["site_id"]:
+            continue
+
+        events = store.get_events(req.id)
+        row = process_request_sla(req, events, store)
+
+        if p["responder_id"] is not None and row["responder_id"] != p["responder_id"]:
+            continue
+        if p["late"] is not None and row["completed_late"] is not p["late"]:
+            continue
+        if p["within_target"] is not None and row["within_target"] is not p["within_target"]:
+            continue
+
+        filtered_rows.append(row)
+
+    return sorted(filtered_rows, key=lambda r: get_sort_tuple(r, p["sort"]))
+
+
+@app.get("/api/requests")
+def browse(request: Request):
+    if not store.ready:
+        return JSONResponse(status_code=503, content={"error": "App is syncing data, not ready yet"})
+
+    params = request.query_params
+    err, p = _parse_browse_params(params)
+    if err:
+        return err
 
     # Limit parameter
     limit_str = params.get("limit", "50")
@@ -154,33 +193,12 @@ def browse(request: Request):
     cursor_tuple = None
     if cursor_str:
         try:
-            cursor_tuple = tuple(parse_cursor(cursor_str, sort_type))
+            cursor_tuple = tuple(parse_cursor(cursor_str, p["sort"]))
         except ValueError as e:
             return JSONResponse(status_code=400, content={"error": str(e)})
 
-    # Fetch eligible requests
-    eligible = store.get_eligible_requests(from_date, to_date)
-    filtered_rows = []
-
-    for req in eligible:
-        if site_id_val is not None and req.site_id != site_id_val:
-            continue
-
-        events = store.get_events(req.id)
-        row = process_request_sla(req, events, store)
-
-        if responder_id_val is not None and row["responder_id"] != responder_id_val:
-            continue
-        if late_val is not None and row["completed_late"] is not late_val:
-            continue
-        if within_target_val is not None and row["within_target"] is not within_target_val:
-            continue
-
-        filtered_rows.append(row)
-
-    # Sort rows
-    sorted_rows = sorted(filtered_rows, key=lambda r: get_sort_tuple(r, sort_type))
-    keys = [get_sort_tuple(r, sort_type) for r in sorted_rows]
+    sorted_rows = _get_filtered_sorted_rows(p)
+    keys = [get_sort_tuple(r, p["sort"]) for r in sorted_rows]
 
     start_idx = 0
     if cursor_tuple is not None:
@@ -190,7 +208,43 @@ def browse(request: Request):
 
     next_cursor = None
     if start_idx + limit < len(sorted_rows) and len(page) > 0:
-        last_item_key = list(get_sort_tuple(page[-1], sort_type))
-        next_cursor = make_cursor(sort_type, last_item_key)
+        last_item_key = list(get_sort_tuple(page[-1], p["sort"]))
+        next_cursor = make_cursor(p["sort"], last_item_key)
 
     return {"data": page, "next_cursor": next_cursor}
+
+
+CSV_HEADER = ["id", "site_id", "responder_id", "responder", "response_business_minutes", "within_target", "completed_late"]
+
+
+def _csv_value(val: Any) -> str:
+    """Format a value for CSV output: booleans as true/false, None as empty string."""
+    if val is None:
+        return ""
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    return str(val)
+
+
+@app.get("/api/requests.csv")
+def browse_csv(request: Request):
+    if not store.ready:
+        return JSONResponse(status_code=503, content={"error": "App is syncing data, not ready yet"})
+
+    err, p = _parse_browse_params(request.query_params)
+    if err:
+        return err
+
+    sorted_rows = _get_filtered_sorted_rows(p)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(CSV_HEADER)
+    for row in sorted_rows:
+        writer.writerow([_csv_value(row.get(col)) for col in CSV_HEADER])
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=requests.csv"},
+    )

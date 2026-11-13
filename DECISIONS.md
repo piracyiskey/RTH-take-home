@@ -27,4 +27,5 @@ Write in English. Short bullet points are fine. Reviewers read this file alongsi
 
 - **Scale Beyond Memory Limits:** For 12,000 requests, in-memory dicts provide sub-millisecond query responses. If data grew to millions of requests, I would migrate the store to PostgreSQL or SQLite with composite indexes on `(site_id, created_at)` and pre-aggregated summary tables.
 - **Pre-computed SLA Cache:** Currently, SLA metrics are calculated from event histories when queries arrive. Pre-computing SLA metrics during the change feed ingestion would make 6-month aggregations virtually instantaneous ($O(1)$ range lookup).
-- **Frontend Polish:** Kept the frontend UI strictly simple and functional (semantic HTML, native CSS, vanilla JavaScript table rendering without external framework bloat). With more time, I would add quick-range presets ("Last 30 Days", "Current Month") and CSV report export.
+- **Mid-project Scope Addition (CSV Export):** Responded to the client's finance team request by adding `GET /api/requests.csv` and a 1-click Download CSV button. Reused the existing filter and sort pipeline from the browse view while streaming RFC-4180 compliant CSV output.
+- **Next Steps:** With more time, I would add server-side PDF report generation, dark mode support, and an alerts mechanism for requests approaching SLA deadlines.

@@ -426,6 +426,24 @@ tbody tr:last-child td {
   background: var(--danger-bg);
 }
 
+.btn-download-csv {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius);
+  cursor: pointer;
+  margin-left: auto;
+  transition: all 0.15s ease;
+}
+
+.btn-download-csv:hover {
+  background: #f1f5f9;
+  border-color: var(--text-muted);
+}
+
 /* Badges */
 .badge {
   display: inline-flex;

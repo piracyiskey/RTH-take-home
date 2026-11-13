@@ -550,6 +550,21 @@ function goToPrevPage() {
   loadRequestsPage();
 }
 
+function downloadRequestsCsv() {
+  const params = new URLSearchParams({
+    from: currentFrom,
+    to: currentTo,
+    sort: selectedSort
+  });
+
+  if (selectedSiteId) params.append("site_id", selectedSiteId);
+  if (selectedResponderId) params.append("responder_id", selectedResponderId);
+  if (selectedWithinTarget) params.append("within_target", selectedWithinTarget);
+  if (selectedLate) params.append("late", selectedLate);
+
+  window.location.href = `/api/requests.csv?${params.toString()}`;
+}
+
 /* --- HELPERS --- */
 function formatDuration(mins) {
   if (mins === null || mins === undefined) return "—";

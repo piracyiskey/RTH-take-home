@@ -192,3 +192,50 @@ def test_browse_cursor_pagination_walk():
     # Every item visited exactly once in order
     assert all_seen == [1, 2, 3, 4, 5]
 
+
+def test_browse_csv_export():
+    # Test staff with comma in name to verify standard quoting
+    store.upsert_staff(Staff(id=305, name='Doe, Jane "JD"'))
+    store.upsert_request(
+        RequestItem(id=6, site_id=11, status="complete", priority="Low", created_at="2026-10-05T00:00:00Z")
+    )
+    store.upsert_event(
+        EventItem(id=601, request_id=6, status="processing", at=1791158400 + 600, actor_id=305)
+    )
+
+    res = client.get("/api/requests.csv?from=2026-10-01&to=2026-10-31")
+    assert res.status_code == 200
+    assert "text/csv" in res.headers["content-type"]
+
+    lines = [line.strip() for line in res.text.strip().splitlines() if line.strip()]
+    assert lines[0] == "id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late"
+
+    # Req 1: id=1, site_id=11, responder_id=301, responder=Alice, minutes=30, within_target=true, completed_late=false
+    assert "1,11,301,Alice,30,true,false" in lines
+
+    # Req 2: id=2, site_id=11, responder_id=302, responder=Bob, minutes=90, within_target=false, completed_late=true
+    assert "2,11,302,Bob,90,false,true" in lines
+
+    # Req 4: null values formatted as empty fields
+    # id=4, site_id=12, responder_id=None, responder=None, mins=None, within_target=None, late=None
+    assert "4,12,,,,," in lines
+
+    # Req 6: quotes on name with comma and quotes
+    assert '6,11,305,"Doe, Jane ""JD""",10,true,' in lines
+
+
+def test_browse_csv_filters_and_sort_ignores_limit_cursor():
+    # Filter site_id=11, sort=-id, limit=1 and cursor passed should be ignored
+    res = client.get("/api/requests.csv?from=2026-10-01&to=2026-10-31&site_id=11&sort=-id&limit=1&cursor=bogus")
+    assert res.status_code == 200
+    lines = [line.strip() for line in res.text.strip().splitlines() if line.strip()]
+
+    # Header + 3 site 11 items (id=5, 2, 1) sorted -id
+    assert lines[0] == "id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late"
+    data_lines = lines[1:]
+    assert len(data_lines) == 3
+    assert data_lines[0].startswith("5,11,")
+    assert data_lines[1].startswith("2,11,")
+    assert data_lines[2].startswith("1,11,")
+
+
