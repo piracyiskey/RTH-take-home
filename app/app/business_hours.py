@@ -1,6 +1,6 @@
 """Business hours and response minutes calculation."""
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from app.models import Site
