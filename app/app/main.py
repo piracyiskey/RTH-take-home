@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.browse import get_sort_tuple, make_cursor, parse_cursor
 from app.sla import compute_sla_report, process_request_sla
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Response-time report", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")
