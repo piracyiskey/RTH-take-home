@@ -257,22 +257,21 @@ function renderSiteSummaryCards(requests) {
   }
 
   // Render "All Sites" card
-  const allCard = createSiteCardEl("All Sites", "", overall, selectedSiteId === "");
+  const allCard = createSiteCardEl("All Sites", overall);
   container.appendChild(allCard);
 
   // Render sorted individual site cards
   const sortedSiteIds = Object.keys(siteStats).map(Number).sort((a, b) => a - b);
   sortedSiteIds.forEach(sId => {
     const siteLabel = SITE_NAMES[sId] ? `Site #${sId} (${SITE_NAMES[sId]})` : `Site #${sId}`;
-    const card = createSiteCardEl(siteLabel, String(sId), siteStats[sId], selectedSiteId === String(sId));
+    const card = createSiteCardEl(siteLabel, siteStats[sId]);
     container.appendChild(card);
   });
 }
 
-function createSiteCardEl(title, siteIdStr, st, isActive) {
+function createSiteCardEl(title, st) {
   const card = document.createElement("div");
-  card.className = "site-card" + (isActive ? " active" : "");
-  card.onclick = () => onSiteCardClick(siteIdStr);
+  card.className = "site-card";
 
   const avgMins = st.respCount > 0 ? Math.round(st.respSum / st.respCount) : null;
   const avgFormatted = formatDuration(avgMins);
@@ -288,7 +287,6 @@ function createSiteCardEl(title, siteIdStr, st, isActive) {
   card.innerHTML = `
     <div class="site-card-header">
       <span class="site-card-title">${title}</span>
-      <span class="site-card-active-tag">Active Filter</span>
     </div>
     <div class="metrics-grid">
       <div class="metric-item">
@@ -312,19 +310,6 @@ function createSiteCardEl(title, siteIdStr, st, isActive) {
   return card;
 }
 
-function onSiteCardClick(siteIdStr) {
-  if (selectedSiteId === siteIdStr) {
-    selectedSiteId = "";
-  } else {
-    selectedSiteId = siteIdStr;
-  }
-  document.getElementById("filter-site").value = selectedSiteId;
-  updateClearFiltersButton();
-  renderSiteSummaryCards(activeReportData.requests);
-  resetPagination();
-  loadRequestsPage();
-}
-
 /* --- SECTION C: RESPONDER SUMMARY TABLE --- */
 function renderRespondersTable(responders) {
   const tbody = document.getElementById("responders-tbody");
@@ -344,8 +329,6 @@ function renderRespondersTable(responders) {
 
   sorted.forEach(r => {
     const tr = document.createElement("tr");
-    tr.className = "interactive-row" + (selectedResponderId === String(r.id) ? " active-row" : "");
-    tr.onclick = () => onResponderRowClick(String(r.id));
 
     const targetPct = r.requests > 0 ? ((r.within_target / r.requests) * 100).toFixed(1) : "0.0";
     const latePct = r.requests > 0 ? ((r.completed_late / r.requests) * 100).toFixed(1) : "0.0";
@@ -368,19 +351,6 @@ function sortResponders(key) {
     responderSortAsc = (key === "name");
   }
   renderRespondersTable(activeReportData ? activeReportData.responders : []);
-}
-
-function onResponderRowClick(respIdStr) {
-  if (selectedResponderId === respIdStr) {
-    selectedResponderId = "";
-  } else {
-    selectedResponderId = respIdStr;
-  }
-  document.getElementById("filter-responder").value = selectedResponderId;
-  updateClearFiltersButton();
-  renderRespondersTable(activeReportData ? activeReportData.responders : []);
-  resetPagination();
-  loadRequestsPage();
 }
 
 /* --- SECTION D: REQUESTS BROWSE TABLE (Level 4 API) --- */
@@ -423,11 +393,6 @@ function onFilterChange() {
   selectedLimit = parseInt(document.getElementById("filter-limit").value, 10);
 
   updateClearFiltersButton();
-  if (activeReportData) {
-    renderSiteSummaryCards(activeReportData.requests);
-    renderRespondersTable(activeReportData.responders);
-  }
-
   resetPagination();
   loadRequestsPage();
 }
@@ -448,11 +413,6 @@ function clearAllFilters() {
   document.getElementById("filter-late").value = "";
 
   updateClearFiltersButton();
-  if (activeReportData) {
-    renderSiteSummaryCards(activeReportData.requests);
-    renderRespondersTable(activeReportData.responders);
-  }
-
   resetPagination();
   loadRequestsPage();
 }
