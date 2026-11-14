@@ -71,6 +71,28 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 | `/ready` | `GET` | Readiness check (`200 {"ready": true}` or `503`) |
 | `/api/sla-report` | `GET` | SLA report and responder aggregates (`?from=YYYY-MM-DD&to=YYYY-MM-DD`) |
 | `/api/requests` | `GET` | Filtered, sorted, and cursor-paginated request list |
+| `/api/requests.csv` | `GET` | Downloadable CSV export of filtered and sorted requests |
+
+---
+
+## Project Structure
+
+```text
+app/
+├── app/
+│   ├── main.py              # FastAPI routes, lifespan worker, validation, CSV export
+│   ├── sla.py               # SLA rule engine (Rules 2–7) & responder aggregations
+│   ├── business_hours.py    # Calendar business-minutes calculator (timezones, holidays, partial days)
+│   ├── store.py             # In-memory data replica (requests, events, sites, staff)
+│   ├── sync.py              # Change feed consumer (/v1/changes bulk load + 10s live poll)
+│   ├── browse.py            # Nulls-last sorting and HMAC-signed cursor pagination
+│   ├── helpdesk.py          # Async/sync API client with HTTP 429 Retry-After backoff
+│   └── models.py            # Dataclasses with slots for low memory footprint
+├── static/                  # Single-page frontend dashboard (index.html, styles.css, app.js)
+├── tests/                   # Unit & integration tests for all business rules and endpoints
+├── Dockerfile               # Container build definition for Python 3.12-slim
+└── requirements.txt         # Pinned application dependencies
+```
 
 ---
 
