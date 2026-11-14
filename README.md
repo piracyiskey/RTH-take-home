@@ -1,52 +1,81 @@
-# Response-time report: starter kit
+# SLA Response-Time Report
 
-The rules are in the brief on your invitation page. Everything else is here.
+A FastAPI web service that calculates response-time metrics and SLA compliance across properties in Singapore, Sydney, and Jakarta, powered by an in-memory replica synchronized with the Helpdesk API.
 
+---
+
+## Quick Start (Docker - Recommended)
+
+The application and tests are containerized and evaluated via Docker Compose.
+
+### 1. Clone the repository
+```bash
+git clone https://github.com/piracyiskey/RTH-take-home.git
+cd RTH-take-home
 ```
-docs/contract.md    what your app must return (graded automatically)
-docs/rules.md       the brief's rules with the exact field names
-docs/api.md         the helpdesk API your app reads
-starters/           a runnable starter in Node, Rails and Python: pick one
-DECISIONS.md        fill this in; it is part of your submission
-docker-compose.yml  runs your app
-.env.example        copy to .env and paste in your practice API details
+
+### 2. Configure environment
+Create a `.env` file in the project root:
+```bash
+cp .env.example .env
+```
+Fill in your test Helpdesk credentials:
+```env
+HELPDESK_URL=https://hiring.robusttechhouse.com/practice-api/...
+HELPDESK_TOKEN=your_token_here
 ```
 
-## Setup
+### 3. Run the application
+```bash
+docker compose up --build
+```
+- **Web UI:** [http://localhost:8080](http://localhost:8080)
+- **Readiness check:** [http://localhost:8080/ready](http://localhost:8080/ready) *(returns `200 {"ready": true}` once initial sync completes in ~40–50s)*
+- **Health check:** [http://localhost:8080/health](http://localhost:8080/health)
 
-You need Docker (with Compose) and Git.
+### 4. Run automated tests
+```bash
+docker compose run --rm app test
+```
+
+---
+
+## Local Development (Without Docker)
+
+If developing outside Docker with Python 3.12+:
 
 ```bash
-git init && git add -A && git commit -m "chore: start from the kit"
-cp .env.example .env                 # paste in HELPDESK_URL and HELPDESK_TOKEN
-cp -r starters/node-express app      # or starters/rails, or starters/python-fastapi
-docker compose up --build            # your app on http://localhost:8080
-curl http://localhost:8080/health    # {"ok": true}
-docker compose run --rm app test     # your tests, exit 0 = pass
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate       # On Windows: .venv\Scripts\Activate.ps1
+
+# Install dependencies
+pip install -r app/requirements.txt
+
+# Run test suite
+pytest
+
+# Start development server
+cd app
+uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-Check the API works:
+---
 
-```bash
-curl -H "Authorization: Bearer $HELPDESK_TOKEN" "$HELPDESK_URL/v1/statuses"
-```
+## API Endpoints
 
-You may replace the starter with your own Node, Rails or Python app. Keep these working:
-`docker compose up`, `docker compose run --rm app test`, port 8080, a service named `app`, and
-reading `HELPDESK_URL` and `HELPDESK_TOKEN` from the environment. You may add a database or cache
-to `docker-compose.yml`.
+| Endpoint | Method | Description |
+| :--- | :---: | :--- |
+| `/` | `GET` | Clean tabular web report interface |
+| `/health` | `GET` | Liveness check (`200 {"ok": true}`) |
+| `/ready` | `GET` | Readiness check (`200 {"ready": true}` or `503`) |
+| `/api/sla-report` | `GET` | SLA report and responder aggregates (`?from=YYYY-MM-DD&to=YYYY-MM-DD`) |
+| `/api/requests` | `GET` | Filtered, sorted, and cursor-paginated request list |
 
-No Docker? Run the starter directly with those two variables set, but we grade with Docker, so
-check it builds before you submit.
+---
 
-## Submitting
+## Documentation & Decisions
 
-1. Commit as you go (at least 5 commits); we read the history.
-2. Fill in `DECISIONS.md`.
-3. Record a short screen recording (about 3 minutes) of the app, narrated in English.
-4. Push to a **public** repo (e.g. GitHub) and paste the link on your invitation page, or zip the
-   folder **including `.git`** (leave out `node_modules` and `.env`) and upload it there.
-
-Cap it at 3 hours. Go through the levels in order and say in `DECISIONS.md` what you'd do next.
-**Submit even if it's unfinished:** we review everything you did, not only the final result.
-A plain table is enough; polish isn't scored. We never reuse submissions as company work.
+- **[DECISIONS.md](DECISIONS.md):** Detailed rationale on architecture, API discoveries, edge-case handling, AI tool usage, and trade-offs.
+- **[README-starter-kit.md](README-starter-kit.md):** Original instructions and starter kit requirements.
+- **[`docs/`](docs/):** Original problem brief, contract specification, rules, and API reference.
